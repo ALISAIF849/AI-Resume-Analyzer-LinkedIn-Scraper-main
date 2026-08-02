@@ -1,0 +1,14 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+*.dll
+*.lib
+.DS_Store
+.idea/
+.ipynb_checkpoints/
+.dist/
+.claude/
+chromedriver.exe
