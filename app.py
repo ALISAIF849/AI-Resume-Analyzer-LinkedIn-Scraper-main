@@ -171,7 +171,8 @@ def init_session_state():
         "summary_cache": None,     # Cached summary text
         "ats_score_result": None,
         "cover_letter_result": None,
-        "interview_q_result": None
+        "interview_q_result": None,
+        "suggested_linkedin_titles": None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -260,18 +261,47 @@ class resume_analyzer:
         return query
 
     @staticmethod
+    def linkedin_search_titles_prompt(resume_summary):
+        query = f'''Based on the resume summary below, output ONLY 3 to 5 concise job titles this candidate
+should search for on LinkedIn, separated by commas, with no numbering, no bullet points, no explanation,
+and no extra text of any kind — just the comma-separated titles. Example output format:
+Software Engineer, Backend Developer, Python Developer
+
+Resume Summary:
+{resume_summary}
+'''
+        return query
+
+    @staticmethod
     def ats_check_prompt(resume_summary, job_description):
         query = f"""
-        You are a highly skilled resume analyst and career coach. Your task is to act as an Applicant Tracking System (ATS).
+        You are a strict, no-nonsense ATS (Applicant Tracking System) auditor and technical recruiter with 15 years
+        of experience rejecting unqualified resumes. You are known for being harsh and literal — you do NOT give
+        credit for "adjacent" skills, generic enthusiasm, or vague claims. A resume only scores well if it
+        demonstrably satisfies what the job description explicitly asks for.
 
-        Analyze the following resume summary and job description to determine how well the resume matches the job description.
+        Score strictly using this rubric — do not default to a "safe" middle score:
+        - 0-30%: Resume is missing most required skills, tools, and experience level from the job description.
+        - 31-50%: Resume shares the general field but is missing several explicitly required skills/qualifications.
+        - 51-70%: Resume covers roughly half the explicit requirements; notable gaps remain in key skills or seniority.
+        - 71-85%: Resume covers most explicit requirements with only minor gaps.
+        - 86-100%: Resume near-exhaustively matches the required skills, tools, experience level, and domain.
 
-        Provide the following information in a structured, detailed way:
+        Rules:
+        - Count exact and near-exact keyword/skill/tool matches between the job description and resume. Do not
+          assume the candidate has a skill unless it is stated in the resume.
+        - Penalize missing years-of-experience requirements, missing required tools/technologies, and missing
+          domain-specific qualifications explicitly named in the job description.
+        - Do not round up out of politeness. Most resumes that were not written specifically for this job
+          description should NOT score above 70%.
 
-        1.  **Overall Match Score:** A single percentage (e.g., "75%") representing the overall match.
-        2.  **Summary of the Match:** A concise paragraph explaining why the resume is a good or poor fit.
-        3.  **Missing Keywords:** A list of important keywords from the job description that are not present in the resume.
-        4.  **Actionable Improvements:** A list of 3-5 specific, actionable suggestions to improve the resume for this particular job, focusing on how to incorporate the missing keywords and better highlight relevant skills.
+        Analyze the following resume summary and job description, then provide:
+
+        1.  **Overall Match Score:** A single percentage reflecting strict rubric-based scoring above.
+        2.  **Score Justification:** Explicitly state which rubric band was used and why.
+        3.  **Summary of the Match:** A concise, honest paragraph on fit — call out weaknesses plainly.
+        4.  **Missing Keywords:** Every important keyword/skill/tool from the job description absent from the resume.
+        5.  **Actionable Improvements:** 3-5 specific, actionable suggestions to close the gaps found above.
 
         ---
         Resume Summary:
@@ -461,7 +491,10 @@ class linkedin_scraper:
     @staticmethod
     def link_open_scrolldown(driver, link, job_count):
         linkedin_scraper._open_link_wait(driver, link)
-        for _ in range(0, job_count):
+        # Scroll generously regardless of job_count so enough candidates are loaded
+        # for title/location filtering to still leave job_count matches afterward.
+        scroll_iterations = max(job_count, 5)
+        for _ in range(0, scroll_iterations):
             body = driver.find_element(by=By.TAG_NAME, value='body')
             body.send_keys(Keys.PAGE_UP)
             try:
@@ -608,16 +641,39 @@ class linkedin_scraper:
     @staticmethod
     def get_userinput():
         add_vertical_space(2)
+
+        # Suggest job titles from the uploaded resume, if available, so the search
+        # is grounded in the candidate's actual background rather than a blank guess.
+        has_resume_context = (
+            st.session_state.get("summary_cache")
+            and st.session_state.get("groq_api_key", "").strip()
+            and st.session_state.get("pdf_chunks")
+        )
+        if has_resume_context and not st.session_state.get("suggested_linkedin_titles"):
+            with st.spinner("Suggesting job titles from your resume..."):
+                titles_prompt = resume_analyzer.linkedin_search_titles_prompt(st.session_state.summary_cache)
+                st.session_state.suggested_linkedin_titles = resume_analyzer.groq_llm(
+                    st.session_state.groq_api_key,
+                    st.session_state.pdf_chunks,
+                    titles_prompt
+                ).strip()
+
+        default_title = st.session_state.get("suggested_linkedin_titles") or ""
+        if default_title:
+            st.caption(f"Suggested from your resume: {default_title} — edit below if you want to search something else.")
+        elif not has_resume_context:
+            st.caption("Tip: upload your resume on the Summary page first to get job title suggestions here.")
+
         with st.form(key='linkedin_scarp'):
             add_vertical_space(1)
             col1, col2, col3 = st.columns([0.5, 0.3, 0.2], gap='medium')
             with col1:
-                job_title_input = st.text_input(label='Job Title')
+                job_title_input = st.text_input(label='Job Title', value=default_title)
                 job_title_input = job_title_input.split(',') if job_title_input else []
             with col2:
                 job_location = st.text_input(label='Job Location', value='India')
             with col3:
-                job_count = st.number_input(label='Job Count', min_value=1, value=1, step=1)
+                job_count = st.number_input(label='Job Count', min_value=1, value=5, step=1)
 
             add_vertical_space(1)
             submit = st.form_submit_button(label='Submit')
