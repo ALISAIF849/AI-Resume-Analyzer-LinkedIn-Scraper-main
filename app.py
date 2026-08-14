@@ -502,8 +502,25 @@ class linkedin_scraper:
                 confirmation_count += 1
         return scrap_job_title if confirmation_count > 0 else np.nan
 
+    # LinkedIn's experience-level filter (f_E) and recency sort (sortBy=DD) are silently
+    # ignored on the anonymous/guest job search page (verified: Internship vs Director-level
+    # searches returned identical results). So experience level is approximated here via
+    # title keywords, and recency is enforced by sorting on each card's actual posted date
+    # instead of trusting LinkedIn's result order.
+    FRESHER_KEYWORDS = ['intern', 'internship', 'trainee', 'fresher', 'entry level', 'entry-level', 'graduate', 'campus', 'junior']
+
     @staticmethod
-    def scrap_company_data(driver, job_title_input, job_location):
+    def experience_level_filter(scrap_job_title, job_level):
+        if job_level == 'Any':
+            return scrap_job_title
+        title_lower = scrap_job_title.lower()
+        is_fresher_role = any(k in title_lower for k in linkedin_scraper.FRESHER_KEYWORDS)
+        if job_level == 'Internship / Fresher':
+            return scrap_job_title if is_fresher_role else np.nan
+        return scrap_job_title if not is_fresher_role else np.nan
+
+    @staticmethod
+    def scrap_company_data(driver, job_title_input, job_location, job_level='Any'):
         company = driver.find_elements(by=By.CSS_SELECTOR, value='h4[class="base-search-card__subtitle"]')
         company_name = [i.text for i in company]
 
@@ -516,15 +533,25 @@ class linkedin_scraper:
         url = driver.find_elements(by=By.CSS_SELECTOR, value='a.base-card__full-link')
         website_url = [i.get_attribute('href') for i in url]
 
+        posted = driver.find_elements(by=By.CSS_SELECTOR, value='time[class*="job-search-card__listdate"]')
+        posted_date = [i.get_attribute('datetime') for i in posted]
+
         df = pd.DataFrame(company_name, columns=['Company Name'])
         df['Job Title'] = pd.DataFrame(job_title)
         df['Location'] = pd.DataFrame(company_location)
         df['Website URL'] = pd.DataFrame(website_url)
+        df['Posted Date'] = pd.DataFrame(posted_date)
 
         df['Job Title'] = df['Job Title'].apply(lambda x: linkedin_scraper.job_title_filter(x, job_title_input))
+        df['Job Title'] = df['Job Title'].apply(
+            lambda x: linkedin_scraper.experience_level_filter(x, job_level) if pd.notna(x) else x
+        )
         df['Location'] = df['Location'].apply(lambda x: x if job_location.lower() in x.lower() else np.nan)
 
-        df = df.dropna()
+        df = df.dropna(subset=['Company Name', 'Job Title', 'Location', 'Website URL'])
+        # Most recent postings first — LinkedIn's own sort/date-filter params don't work
+        # for anonymous scraping, so recency is enforced here using each card's real date.
+        df = df.sort_values(by='Posted Date', ascending=False, na_position='last')
         df.reset_index(drop=True, inplace=True)
         return df
 
@@ -566,7 +593,7 @@ class linkedin_scraper:
         df = df.iloc[:len(job_description), :]
         df['Job Description'] = pd.DataFrame(job_description, columns=['Description'])
         df['Job Description'] = df['Job Description'].apply(lambda x: np.nan if x == 'Description Not Available' else x)
-        df = df.dropna()
+        df = df.dropna(subset=['Company Name', 'Job Title', 'Location', 'Website URL', 'Job Description'])
         df.reset_index(drop=True, inplace=True)
         return df
 
@@ -580,8 +607,9 @@ class linkedin_scraper:
                 st.write(f"Job Title    : {df_final.iloc[i,1]}")
                 st.write(f"Location     : {df_final.iloc[i,2]}")
                 st.write(f"Website URL  : {df_final.iloc[i,3]}")
+                st.write(f"Posted On    : {df_final.iloc[i,4]}")
                 with st.expander(label='Job Desription'):
-                    st.write(df_final.iloc[i, 4])
+                    st.write(df_final.iloc[i, 5])
                 add_vertical_space(3)
         else:
             st.markdown('<h5 style="text-align: center;color:#14B8A6;">No Matching Jobs Found</h5>', unsafe_allow_html=True)
@@ -590,7 +618,7 @@ class linkedin_scraper:
     def main():
         driver = None
         try:
-            job_title_input, job_location, job_count, submit = linkedin_scraper.get_userinput()
+            job_title_input, job_location, job_count, job_level, submit = linkedin_scraper.get_userinput()
             add_vertical_space(2)
             if submit:
                 if job_title_input != [] and job_location != '':
@@ -602,7 +630,7 @@ class linkedin_scraper:
                         linkedin_scraper.link_open_scrolldown(driver, link, job_count)
 
                     with st.spinner('Scraping Job Details...'):
-                        df = linkedin_scraper.scrap_company_data(driver, job_title_input, job_location)
+                        df = linkedin_scraper.scrap_company_data(driver, job_title_input, job_location, job_level)
                         df_final = linkedin_scraper.scrap_job_description(driver, df, job_count)
 
                     linkedin_scraper.display_data_userinterface(df_final)
@@ -646,7 +674,7 @@ class linkedin_scraper:
 
         with st.form(key='linkedin_scarp'):
             add_vertical_space(1)
-            col1, col2, col3 = st.columns([0.5, 0.3, 0.2], gap='medium')
+            col1, col2, col3 = st.columns([0.4, 0.25, 0.15], gap='medium')
             with col1:
                 job_title_input = st.text_input(label='Job Title', value=default_title)
                 job_title_input = job_title_input.split(',') if job_title_input else []
@@ -655,10 +683,20 @@ class linkedin_scraper:
             with col3:
                 job_count = st.number_input(label='Job Count', min_value=1, value=5, step=1)
 
+            job_level = st.selectbox(
+                label='Experience Level',
+                options=['Any', 'Internship / Fresher', 'Experienced'],
+                help=(
+                    "LinkedIn doesn't expose this filter to anonymous searches, so this is applied "
+                    "afterward by matching keywords (intern, fresher, graduate, etc.) in each job title — "
+                    "it's a best-effort match, not a guaranteed-precise filter."
+                )
+            )
+
             add_vertical_space(1)
             submit = st.form_submit_button(label='Submit')
             add_vertical_space(1)
-        return job_title_input, job_location, job_count, submit
+        return job_title_input, job_location, job_count, job_level, submit
 
 
 # -------------- Helper: ensure inputs exist before running --------------
