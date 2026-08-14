@@ -30,21 +30,7 @@ Developed an advanced AI application that leverages Retrieval-Augmented Generati
 
 ## Installation
 
-To run this project, you need to install the following packages:
-
-```bash
-pip install numpy
-pip install pandas
-pip install streamlit
-pip install streamlit_option_menu
-pip install streamlit_extras
-pip install PyPDF2
-pip install langchain
-pip install openai
-pip install tiktoken
-pip install faiss-cpu
-pip install selenium
-```
+All dependencies are listed in `requirements.txt` — see step 2 under Usage below.
 
 ## Usage
 
@@ -52,17 +38,20 @@ To use this project, follow these steps:
 
 1. **Clone the repository:**
    ```bash
-   https://github.com/AliSaif849/AI-Resume-Analyzer-and-LinkedIn-Scraper-using-Generative-AI.git
+   git clone https://github.com/ALISAIF849/AI-Resume-Analyzer-LinkedIn-Scraper-main.git
    ```
 2. **Install the required packages:**
    ```bash
    pip install -r requirements.txt
    ```
-3. **Run the Streamlit app:**
+3. **Configure your Groq API key:**
+   Copy `.env.example` to `.env` and set `GROQ_API_KEY=your_key_here` (get a free key at
+   [console.groq.com/keys](https://console.groq.com/keys)).
+4. **Run the Streamlit app:**
    ```bash
    streamlit run app.py
    ```
-4. **Access the app in your browser at:**
+5. **Access the app in your browser at:**
    ```bash
    http://localhost:8501
    ```
@@ -71,7 +60,8 @@ To use this project, follow these steps:
 
 ### 1. Easy User Experience
 
-- Resume Analyzer AI makes it easy for users. You can upload your resume and enter your **Groq API key** without any hassle.
+- Resume Analyzer AI makes it easy for users — just upload your resume and go. The Groq API key is configured once
+  server-side (via `.env`), so nothing sensitive is ever typed or shown in the browser.
 - The application is designed to be user-friendly so that anyone can use its powerful resume analysis features.
 - It also uses the `PyPDF2` library to quickly extract text from your uploaded resume, which is the first step in doing a thorough analysis.
 
@@ -88,7 +78,7 @@ To use this project, follow these steps:
 ### 4. Intelligent Chunk Selection in RAG and LLM
 
 - Retrieves relevant resume chunks by comparing user queries with vector embeddings and selecting the top K based on similarity scores.
-- Uses **LLaMA 3 8B model** hosted on Groq to analyze and generate smart responses from these retrieved chunks.
+- Uses the **LLaMA 3.3 70B model** hosted on Groq to analyze and generate smart responses from these retrieved chunks.
 
 ### 5. Robust Question-Answering Pipeline
 

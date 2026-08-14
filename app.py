@@ -31,7 +31,6 @@ warnings.filterwarnings('ignore')
 
 # Load environment variables from .env file (once)
 load_dotenv()
-hf_token = os.getenv("HUGGINGFACEHUB_API_TOKEN", "")
 groq_env_api_key = os.getenv("GROQ_API_KEY", "")
 
 
@@ -353,25 +352,6 @@ Resume Summary:
         Job Description:
         {job_description}
         """
-        return query
-
-    @staticmethod
-    def resume_score_prompt(resume_summary):
-        query = f"""
-            You are a professional resume evaluation tool. Analyze the following resume summary and provide a numerical score and a detailed breakdown.
-
-            Provide the following information in a structured format:
-
-            1.  **Overall Resume Score:** A single percentage (e.g., "85%") that reflects the overall quality of the resume based on clarity, impact, and completeness.
-            2.  **Detailed Breakdown:** A list of key strengths and weaknesses in bullet points.
-                - **Strengths:** Identify specific parts of the resume that are strong (e.g., project descriptions, relevant skills).
-                - **Weaknesses:** Identify specific areas that could be improved (e.g., vague language, formatting issues, missing details).
-            3.  **Actionable Advice:** Provide 2-3 concrete tips on how the resume can be improved.
-
-            ---
-            Resume Summary:
-            {resume_summary}
-            """
         return query
 
 
