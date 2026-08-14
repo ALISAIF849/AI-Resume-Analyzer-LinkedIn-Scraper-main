@@ -18,3 +18,4 @@ langchain-classic
 sentence-transformers
 numpy
 pandas
+fpdf2

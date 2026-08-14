@@ -2,6 +2,8 @@
 import time
 import platform
 import os
+import re
+import io
 import warnings
 
 import numpy as np
@@ -15,6 +17,8 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_groq import ChatGroq
 from langchain_classic.chains.question_answering import load_qa_chain
+from fpdf import FPDF
+from fpdf.enums import XPos, YPos
 
 # Selenium imports (combined, robust)
 from selenium import webdriver
@@ -37,6 +41,77 @@ groq_env_api_key = os.getenv("GROQ_API_KEY", "")
 def add_vertical_space(num_lines: int = 1) -> None:
     """Vertical spacing helper (streamlit_extras.add_vertical_space is deprecated in favor of st.space)."""
     st.space(num_lines * 24)
+
+
+# -------------- Visual components (score meter, skill badges, stat tiles) --------------
+def parse_score_percent(text):
+    """Pull the match-score percentage out of an LLM's free-text response, if present."""
+    if not text:
+        return None
+    labeled = re.search(r'match score\**:?\**\s*(\d{1,3})\s*%', text, re.IGNORECASE)
+    if labeled:
+        return min(100, max(0, int(labeled.group(1))))
+    match = re.search(r'(\d{1,3})\s*%', text)
+    if not match:
+        return None
+    return min(100, max(0, int(match.group(1))))
+
+
+def score_band(score):
+    """Map a 0-100 score to a status color + qualitative label (never color alone)."""
+    if score < 40:
+        return '#d03b3b', 'Weak Match'
+    if score < 60:
+        return '#ec835a', 'Below Average Match'
+    if score < 75:
+        return '#fab219', 'Moderate Match'
+    return '#0ca30c', 'Strong Match'
+
+
+def render_score_meter(score):
+    if score is None:
+        return
+    color, label = score_band(score)
+    deg = int(score / 100 * 360)
+    st.markdown(
+        f"""
+        <div class="score-meter-wrap">
+            <div class="score-meter" style="background: conic-gradient({color} {deg}deg, #e1e0d9 {deg}deg);">
+                <div class="score-meter-inner">
+                    <div class="score-meter-value">{score}%</div>
+                    <div class="score-meter-label" style="color:{color};">{label}</div>
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+
+def render_skill_badges(skills_csv):
+    if not skills_csv:
+        return
+    skills = [s.strip() for s in skills_csv.split(',') if s.strip()]
+    if not skills:
+        return
+    chips_html = ''.join(f'<span class="skill-badge">{s}</span>' for s in skills)
+    st.markdown(f'<div class="skill-badge-row">{chips_html}</div>', unsafe_allow_html=True)
+
+
+def render_stat_tiles(stats):
+    tiles = [
+        (str(stats['word_count']), 'Words'),
+        (str(stats['page_count']), 'Pages'),
+        (f"{stats['read_time_min']} min", 'Est. read time'),
+        (str(len(stats['sections_found'])), 'Sections detected'),
+    ]
+    tiles_html = ''.join(
+        f'<div class="stat-tile"><div class="stat-value">{v}</div><div class="stat-label">{l}</div></div>'
+        for v, l in tiles
+    )
+    st.markdown(f'<div class="stat-tile-row">{tiles_html}</div>', unsafe_allow_html=True)
+    if stats['sections_found']:
+        st.caption(f"Sections found: {', '.join(stats['sections_found'])}")
 
 
 # -------------- Streamlit base config --------------
@@ -140,6 +215,52 @@ def streamlit_config():
         border-color: #14B8A6 !important;
         box-shadow: 0 0 0 1px #14B8A6 !important;
     }
+
+    /* Skill badges */
+    .skill-badge-row { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.75rem 0 1rem 0; }
+    .skill-badge {
+        background: rgba(20,184,166,0.10);
+        color: #0F766E;
+        border: 1px solid rgba(20,184,166,0.35);
+        border-radius: 999px;
+        padding: 0.3rem 0.9rem;
+        font-size: 0.85rem;
+        font-weight: 600;
+        white-space: nowrap;
+    }
+
+    /* Stat tiles (resume-at-a-glance) */
+    .stat-tile-row {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        gap: 0.85rem;
+        margin: 0.5rem 0 1.25rem 0;
+    }
+    .stat-tile {
+        background: #FFFFFF;
+        border: 1px solid #E7EBEF;
+        border-radius: 14px;
+        padding: 0.9rem 1rem;
+        text-align: center;
+        box-shadow: 0 2px 10px rgba(15,23,42,0.04);
+    }
+    .stat-tile .stat-value { font-size: 1.6rem; font-weight: 800; color: #0F172A; }
+    .stat-tile .stat-label { font-size: 0.78rem; color: #6B7280; margin-top: 0.15rem; }
+
+    /* Circular score meter */
+    .score-meter-wrap { display: flex; flex-direction: column; align-items: center; margin: 0.5rem 0 1.5rem 0; }
+    .score-meter {
+        width: 168px; height: 168px; border-radius: 50%;
+        display: flex; align-items: center; justify-content: center;
+    }
+    .score-meter-inner {
+        width: 138px; height: 138px; border-radius: 50%;
+        background: #FFFFFF;
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        box-shadow: inset 0 0 0 1px #E7EBEF;
+    }
+    .score-meter-value { font-size: 2.1rem; font-weight: 800; color: #0F172A; }
+    .score-meter-label { font-size: 0.85rem; font-weight: 700; margin-top: 0.25rem; }
     </style>
     """
     st.markdown(custom_style, unsafe_allow_html=True)
@@ -172,6 +293,8 @@ def init_session_state():
         "cover_letter_result": None,
         "interview_q_result": None,
         "suggested_linkedin_titles": None,
+        "resume_stats": None,
+        "extracted_skills": None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -201,6 +324,41 @@ class resume_analyzer:
 
         chunks = text_splitter.split_text(text=text)
         return chunks
+
+    @staticmethod
+    def compute_resume_stats(pdf):
+        """Deterministic resume stats (word count, pages, sections) - no LLM call needed."""
+        pdf_reader = PdfReader(io.BytesIO(pdf.getvalue()))
+        text = ""
+        for page in pdf_reader.pages:
+            page_text = page.extract_text()
+            if page_text:
+                text += page_text + "\n"
+
+        word_count = len(text.split())
+        page_count = len(pdf_reader.pages)
+        read_time_min = max(1, round(word_count / 200))
+
+        section_keywords = {
+            'Experience': ['experience', 'employment', 'work history'],
+            'Education': ['education', 'academic'],
+            'Skills': ['skills', 'technical skills', 'competencies'],
+            'Projects': ['projects', 'portfolio'],
+            'Certifications': ['certification', 'certificate', 'license'],
+            'Summary': ['summary', 'objective', 'profile'],
+        }
+        text_lower = text.lower()
+        sections_found = [
+            name for name, keywords in section_keywords.items()
+            if any(k in text_lower for k in keywords)
+        ]
+
+        return {
+            'word_count': word_count,
+            'page_count': page_count,
+            'read_time_min': read_time_min,
+            'sections_found': sections_found,
+        }
 
     @staticmethod
     def groq_llm(groq_api_key, chunks, analyze):
@@ -270,6 +428,70 @@ Resume Summary:
 {resume_summary}
 '''
         return query
+
+    @staticmethod
+    def extract_skills_prompt(resume_summary):
+        query = f'''Based on the resume summary below, output ONLY 6 to 12 concise skill names
+(technical or professional) that appear in the resume, separated by commas, with no numbering,
+no bullet points, no explanation, and no extra text of any kind. Example output format:
+Python, React, Project Management, SQL, Communication
+
+Resume Summary:
+{resume_summary}
+'''
+        return query
+
+    @staticmethod
+    def generate_report_pdf(title, sections):
+        """Build a simple PDF report. sections: list of (heading, body_text) tuples."""
+        replacements = {
+            '–': '-', '—': '--', '‘': "'", '’': "'",
+            '“': '"', '”': '"', '•': '*', '…': '...',
+        }
+
+        def safe(s):
+            s = str(s)
+            for bad, good in replacements.items():
+                s = s.replace(bad, good)
+            return s.encode('latin-1', errors='replace').decode('latin-1')
+
+        def break_long_words(line, max_word_len=60):
+            # fpdf2 also raises if a single unbroken "word" (e.g. a long URL) is
+            # wider than the page and can't be wrapped, so force break points into it.
+            words = []
+            for word in line.split(' '):
+                if len(word) > max_word_len:
+                    word = ' '.join(word[i:i + max_word_len] for i in range(0, len(word), max_word_len))
+                words.append(word)
+            return ' '.join(words)
+
+        def write_body(text):
+            # fpdf2 also raises on an empty string passed to multi_cell, and LLM output
+            # routinely has blank lines between paragraphs, so handle them separately.
+            for line in text.split('\n'):
+                line = break_long_words(line)
+                if line.strip():
+                    pdf.multi_cell(0, 6, line, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+                else:
+                    pdf.ln(6)
+
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font('Helvetica', 'B', 16)
+        # new_x/new_y must be reset explicitly on every call — fpdf2 defaults to
+        # leaving the cursor at the right edge, which starves the *next* multi_cell
+        # of width and raises "Not enough horizontal space to render a single character".
+        pdf.multi_cell(0, 10, safe(title), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        pdf.ln(2)
+
+        for heading, body in sections:
+            pdf.set_font('Helvetica', 'B', 13)
+            pdf.multi_cell(0, 8, safe(heading), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+            pdf.set_font('Helvetica', '', 11)
+            write_body(safe(body))
+            pdf.ln(4)
+
+        return bytes(pdf.output())
 
     @staticmethod
     def ats_check_prompt(resume_summary, job_description):
@@ -713,6 +935,34 @@ def require_resume_and_key():
     return True
 
 
+def render_resume_dashboard():
+    """Stat tiles + skill badges + PDF download, assuming resume/summary are already cached."""
+    if st.session_state.resume_stats is None:
+        st.session_state.resume_stats = resume_analyzer.compute_resume_stats(st.session_state.pdf)
+    render_stat_tiles(st.session_state.resume_stats)
+
+    if st.session_state.extracted_skills is None:
+        with st.spinner("Extracting skills..."):
+            skills_prompt = resume_analyzer.extract_skills_prompt(st.session_state.summary_cache)
+            st.session_state.extracted_skills = resume_analyzer.groq_llm(
+                st.session_state.groq_api_key,
+                st.session_state.pdf_chunks,
+                skills_prompt
+            ).strip()
+    render_skill_badges(st.session_state.extracted_skills)
+
+    pdf_bytes = resume_analyzer.generate_report_pdf(
+        "Resume Summary Report",
+        [("Summary", st.session_state.summary_cache), ("Key Skills", st.session_state.extracted_skills)]
+    )
+    st.download_button(
+        label="Download Summary as PDF",
+        data=pdf_bytes,
+        file_name="resume_summary_report.pdf",
+        mime="application/pdf"
+    )
+
+
 # -------------- App Pages --------------
 streamlit_config()
 init_session_state()
@@ -777,6 +1027,8 @@ if option == 'Summary':
                 )
 
             st.success("Saved! You can switch to other pages without re-uploading.")
+            st.markdown('<h4 style="color:#14B8A6;">Resume at a Glance:</h4>', unsafe_allow_html=True)
+            render_resume_dashboard()
             st.markdown('<h4 style="color:#14B8A6;">Summary:</h4>', unsafe_allow_html=True)
             st.write(st.session_state.summary_cache)
 
@@ -786,9 +1038,11 @@ if option == 'Summary':
             st.warning("This feature isn't available right now. Please try again later.")
 
     # If already stored earlier, show a small status and (optionally) the last summary
-    if (st.session_state.pdf is not None) and st.session_state.groq_api_key.strip():
+    if (st.session_state.pdf is not None) and st.session_state.groq_api_key.strip() and not submit:
         st.info("Resume already saved in this session. Switch tabs freely.")
         if st.session_state.summary_cache:
+            st.markdown('<h4 style="color:#14B8A6;">Resume at a Glance:</h4>', unsafe_allow_html=True)
+            render_resume_dashboard()
             with st.expander("Last Generated Summary"):
                 st.write(st.session_state.summary_cache)
 
@@ -939,7 +1193,21 @@ elif option == 'ATS Check':
 
         # --- Conditional Display of Results ---
         if st.session_state.ats_score_result:
+            score = parse_score_percent(st.session_state.ats_score_result)
+            render_score_meter(score)
             st.write(st.session_state.ats_score_result)
+
+            ats_pdf_bytes = resume_analyzer.generate_report_pdf(
+                "ATS Match Report",
+                [("ATS Analysis", st.session_state.ats_score_result)]
+            )
+            st.download_button(
+                label="Download ATS Report as PDF",
+                data=ats_pdf_bytes,
+                file_name="ats_match_report.pdf",
+                mime="application/pdf",
+                key="download_ats_report"
+            )
         if st.session_state.cover_letter_result:
             st.subheader("Generated Cover Letter")
             st.write(st.session_state.cover_letter_result)
